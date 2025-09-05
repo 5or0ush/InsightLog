@@ -316,23 +316,45 @@ class InsightLogAnalyzer:
                         to_return += line
         return to_return
 
-    def get_requests(self):
+    def get_requests(self, output_format='dict'):
         """
-        Analyze data (from the logs) and return list of auth requests formatted as the model (pattern) defined.
-        :return:
+        Analyze data (from the logs) and return requests in specified format.
+        Supported formats: 'dict', 'json', 'csv'.
+        :param output_format: string specifying output format
+        :return: data in specified format
         """
-        # TODO: Add support for CSV and JSON output
         data = self.filter_all()
         request_pattern = self.__settings['request_model']
         date_pattern = self.__settings['date_pattern']
         date_keys = self.__settings['date_keys']
+
         if self.__settings['type'] == 'web0':
-            return get_web_requests(data, request_pattern, date_pattern, date_keys)
+            requests = get_web_requests(data, request_pattern, date_pattern, date_keys)
         elif self.__settings['type'] == 'auth':
-            return get_auth_requests(data, request_pattern, date_pattern, date_keys)
+            requests = get_auth_requests(data, request_pattern, date_pattern, date_keys)
         else:
-            # TODO: Support more log formats (e.g., IIS, custom logs)
-            return None
+            requests = []
+
+        if output_format == 'dict':
+            return requests
+        elif output_format == 'json':
+            import json
+            return json.dumps(requests)
+        elif output_format == 'csv':
+            import csv
+            import io
+            if not requests:
+                return ""
+            # Get headers from keys of first dict
+            headers = requests[0].keys()
+            output = io.StringIO()
+            writer = csv.DictWriter(output, fieldnames=headers)
+            writer.writeheader()
+            for row in requests:
+                writer.writerow(row)
+            return output.getvalue()
+        else:
+            raise Exception("Unsupported output format: " + output_format)
 
     # TODO: Add log level filtering (e.g., only errors)
     def add_log_level_filter(self, level):
@@ -357,6 +379,8 @@ class InsightLogAnalyzer:
         Export filtered results to a CSV file
         :param path: string
         """
-        pass  # Feature stub
+        csv_data = self.get_requests('csv')
+        with open(path, 'w', newline='') as csvfile:
+            csvfile.write(csv_data)
 
 # TODO: Write more tests for edge cases, error handling, and malformed input
