@@ -3,6 +3,7 @@ import calendar
 from insightlog.settings import *
 from insightlog.validators import *
 from datetime import datetime
+import logging
 
 
 def get_service_settings(service_name):
@@ -302,18 +303,28 @@ class InsightLogAnalyzer:
         Apply all defined patterns and return filtered data
         :return: string
         """
-        # BUG: Large files are read into memory at once (performance issue)
-        # BUG: No warning or log for empty files
         to_return = ""
-        if self.data:
-            for line in self.data.splitlines():
+
+        
+        if self.data is not None:
+            if not str(self.data).strip():
+                logging.warning("Input data is empty.")
+                return to_return
+            for line in str(self.data).splitlines():
                 if self.check_all_matches(line, self.__filters):
-                    to_return += line+"\n"
-        else:
-            with open(self.filepath, 'r') as file_object:
-                for line in file_object:
-                    if self.check_all_matches(line, self.__filters):
-                        to_return += line
+                    to_return += line + "\n"
+            return to_return
+
+        
+        with open(self.filepath, "r") as f:
+            first = f.read(1)
+            if not first:
+                logging.warning("Log file %s is empty.", self.filepath)
+                return to_return
+            f.seek(0)
+            for line in f:
+                if self.check_all_matches(line, self.__filters):
+                    to_return += line
         return to_return
 
     def get_requests(self):
