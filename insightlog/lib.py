@@ -84,8 +84,7 @@ def filter_data(log_filter, data=None, filepath=None, is_casesensitive=True, is_
                 return_data += line+"\n"
         return return_data
     else:
-        # TODO: Better error message for missing data/filepath
-        raise Exception("Data and filepath values are NULL!")
+        raise ValueError("Missing input: provide either `data` (str) or `filepath` (str). Both are unset.")
 
 
 def check_match(line, filter_pattern, is_regex, is_casesensitive, is_reverse):
