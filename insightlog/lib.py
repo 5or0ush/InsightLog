@@ -2,7 +2,9 @@ import re
 import calendar
 from insightlog.settings import *
 from insightlog.validators import *
+
 from datetime import datetime
+import os
 
 
 def get_service_settings(service_name):
@@ -191,16 +193,14 @@ def __get_iso_datetime(str_date, pattern, keys):
 
 
 def __get_auth_year():
-    # TODO: Add support for analysis done in different terms
     """
-    Return the year when the requests happened so there will be no bug if the analyze is done in the new year eve,
-    the library was designed to be used for hourly analysis.
-    :return: int
+    Return the analysis year.
+    Uses environment override INSIGHTLOG_AUTH_YEAR if set; otherwise current year.
     """
-    if datetime.now().month == 1 and datetime.now().day == 1 and datetime.now().hour == 0:
-        return datetime.now().year - 1
-    else:
-        return datetime.now().year
+    override = os.getenv("INSIGHTLOG_AUTH_YEAR")
+    if override and override.isdigit():
+        return int(override)
+    return datetime.now().year
 
 
 class InsightLogAnalyzer:
