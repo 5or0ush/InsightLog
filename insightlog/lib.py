@@ -344,6 +344,8 @@ class InsightLogAnalyzer:
         Apply all defined patterns and return filtered data
         :return: string
         """
+        # FIX BUG: Large files are read into memory at once (performance issue)
+        # BUG: No warning or log for empty files
         # Stream lines to avoid loading entire files or building large intermediate lists.
         # Also warn if the input source is empty.
         out_lines = []
