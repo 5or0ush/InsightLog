@@ -1,8 +1,11 @@
+from asyncio.log import logger
+import os
 import re
 import calendar
 from insightlog.settings import *
 from insightlog.validators import *
 from datetime import datetime
+import io
 
 
 def get_service_settings(service_name):
@@ -341,19 +344,38 @@ class InsightLogAnalyzer:
         Apply all defined patterns and return filtered data
         :return: string
         """
-        # BUG: Large files are read into memory at once (performance issue)
-        # BUG: No warning or log for empty files
-        to_return = ""
-        if self.data:
-            for line in self.data.splitlines():
+        # Stream lines to avoid loading entire files or building large intermediate lists.
+        # Also warn if the input source is empty.
+        out_lines = []
+
+        if self.data is not None:
+            if self.data == "":
+                logger.warning("filter_all: empty in-memory data")
+                return ""
+            # Iterate lazily over the string without splitlines() list allocation
+            for line in io.StringIO(self.data):
                 if self.check_all_matches(line, self.__filters):
-                    to_return += line+"\n"
+                # Ensure newline termination
+                    out_lines.append(line if line.endswith("\n") else line + "\n")
         else:
-            with open(self.filepath, 'r') as file_object:
-                for line in file_object:
-                    if self.check_all_matches(line, self.__filters):
-                        to_return += line
-        return to_return
+        # File path mode
+            try:
+                size = os.path.getsize(self.filepath)
+            except OSError as e:
+                logger.error("filter_all: cannot stat %s: %s", self.filepath, e)
+                raise
+        if size == 0:
+            logger.warning("filter_all: empty file: %s", self.filepath)
+            return ""
+
+        # Use explicit encoding and error policy to be consistent
+        with open(self.filepath, "r", encoding="utf-8", errors="strict") as file_object:
+            for line in file_object:
+                if self.check_all_matches(line, self.__filters):
+                    out_lines.append(line)
+
+        return "".join(out_lines)
+      
 
     def get_requests(self):
         """
