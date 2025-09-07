@@ -1,10 +1,15 @@
+import logging
 import re
 import calendar
-from insightlog.settings import *
-from insightlog.validators import *
+import sys
+from .settings import *
+from .validators import *
 from datetime import datetime
 
-
+def main():
+    print("InsightLog CLI running…")
+if __name__ == "__main__":
+    main()
 def get_service_settings(service_name):
     """
     Get default settings for the said service
@@ -15,7 +20,6 @@ def get_service_settings(service_name):
         return SERVICES_SWITCHER.get(service_name)
     else:
         raise Exception("Service \""+service_name+"\" doesn't exists!")
-
 
 def get_date_filter(settings, minute=datetime.now().minute, hour=datetime.now().hour,
                     day=datetime.now().day, month=datetime.now().month,
@@ -46,46 +50,44 @@ def get_date_filter(settings, minute=datetime.now().minute, hour=datetime.now().
     else:
         raise Exception("Date elements aren't valid")
     return date_filter
-
-
 def filter_data(log_filter, data=None, filepath=None, is_casesensitive=True, is_regex=False, is_reverse=False):
     """
-    Filter received data/file content and return the results
-    :except IOError:
-    :except EnvironmentError:
-    :raises Exception:
-    :param log_filter: string
-    :param data: string
-    :param filepath: string
-    :param is_casesensitive: boolean
-    :param is_regex: boolean
-    :param is_reverse: boolean to inverse selection
-    :return: string
+    Filter received data/file content and return the results as a single string.
+    Raises on invalid inputs or I/O errors. Never returns None.
     """
-    # BUG: This function returns None on error instead of raising
-    # BUG: No encoding handling in file reading (may crash on non-UTF-8 files)
-    # TODO: Log errors/warnings instead of print
-    return_data = ""
-    if filepath:
+    logging.debug(
+        "filter_data: filepath=%r data=%s len=%s regex=%s case=%s reverse=%s",
+        filepath, data is not None, None if data is None else len(data),
+        is_regex, is_casesensitive, is_reverse
+    )
+
+    if not log_filter:
+        raise ValueError("log_filter value is NULL!")
+    if data is None and filepath is None:
+        raise ValueError("Either data or filepath must be provided")
+    if data is not None and filepath is not None:
+        logging.warning("Both data and filepath provided; using `data` and ignoring `filepath`.")
+        filepath = None  # prefer data
+
+    out = []
+
+    if filepath is not None:
         try:
-            with open(filepath, 'r') as file_object:
-                for line in file_object:
+            # robust read (handles non-UTF8 bytes)
+            with open(filepath, "r", encoding="utf-8", errors="replace", newline="") as f:
+                for line in f:
                     if check_match(line, log_filter, is_regex, is_casesensitive, is_reverse):
-                        return_data += line
-            return return_data
-        except (IOError, EnvironmentError) as e:
-            print(e.strerror)
-            # TODO: Log error instead of print
-            # raise  # Should raise instead of just printing
-            return None
-    elif data:
-        for line in data.splitlines():
-            if check_match(line, log_filter, is_regex, is_casesensitive, is_reverse):
-                return_data += line+"\n"
-        return return_data
+                        out.append(line)
+        except OSError as e:
+            logging.exception("filter_data: failed to read %s", filepath)
+            raise
     else:
-        # TODO: Better error message for missing data/filepath
-        raise Exception("Data and filepath values are NULL!")
+        # Ensure lines end with '\n' in the returned string for consistency with file case
+        for line in str(data).splitlines():
+            if check_match(line, log_filter, is_regex, is_casesensitive, is_reverse):
+                out.append(line + "\n")
+
+    return "".join(out)
 
 
 def check_match(line, filter_pattern, is_regex, is_casesensitive, is_reverse):
@@ -106,15 +108,40 @@ def check_match(line, filter_pattern, is_regex, is_casesensitive, is_reverse):
     return check_result and not is_reverse
 
 
+# insightlog/lib.py
+
 def get_web_requests(data, pattern, date_pattern=None, date_keys=None):
     """
-    Analyze data (from the logs) and return list of requests formatted as the model (pattern) defined.
-    :param data: string
-    :param pattern: string
-    :param date_pattern: regex|None
-    :param date_keys: dict|None
-    :return: list
+    Return a list of web request dicts formatted like get_auth_requests:
+    flat dicts with at least DATETIME and SERVICE, plus METHOD, PATH,
+    STATUS, REFERRER, USERAGENT.
     """
+    requests = []
+    requests_tuples = re.findall(pattern, data)
+
+    for request_tuple in requests_tuples:
+        # tuple indices per your regex:
+        # 0: datetime, 1: service, 2: method, 3: path,
+        # 4: status, 5: referrer, 6: useragent
+
+        if date_pattern:
+            str_datetime = __get_iso_datetime(request_tuple[0], date_pattern, date_keys)
+        else:
+            str_datetime = request_tuple[0]
+
+        record = {
+            'DATETIME':  str_datetime,
+            'SERVICE':   request_tuple[1],
+            'METHOD':    request_tuple[2],
+            'PATH':      request_tuple[3],
+            'STATUS':    int(request_tuple[4]) if str(request_tuple[4]).isdigit() else request_tuple[4],
+            'REFERRER':  request_tuple[5],
+            'USERAGENT': request_tuple[6],
+        }
+        requests.append(record)
+
+    return requests
+
     # BUG: Output format inconsistent with get_auth_requests
     # BUG: No handling/logging for malformed lines
     if date_pattern and not date_keys:
@@ -318,21 +345,23 @@ class InsightLogAnalyzer:
 
     def get_requests(self):
         """
-        Analyze data (from the logs) and return list of auth requests formatted as the model (pattern) defined.
-        :return:
+        Analyze data (from the logs) and return list of requests per the service type.
+        Never returns None.
         """
-        # TODO: Add support for CSV and JSON output
         data = self.filter_all()
         request_pattern = self.__settings['request_model']
         date_pattern = self.__settings['date_pattern']
         date_keys = self.__settings['date_keys']
-        if self.__settings['type'] == 'web0':
+
+        stype = self.__settings['type']
+        if stype == 'web0':
             return get_web_requests(data, request_pattern, date_pattern, date_keys)
-        elif self.__settings['type'] == 'auth':
+        if stype == 'auth':
             return get_auth_requests(data, request_pattern, date_pattern, date_keys)
-        else:
-            # TODO: Support more log formats (e.g., IIS, custom logs)
-            return None
+
+        # Consistent API: raise instead of returning None
+        raise ValueError(f"Unsupported service type: {stype!r}")
+
 
     # TODO: Add log level filtering (e.g., only errors)
     def add_log_level_filter(self, level):
