@@ -48,7 +48,16 @@ def get_date_filter(settings, minute=datetime.now().minute, hour=datetime.now().
     return date_filter
 
 
-def filter_data(log_filter, data=None, filepath=None, is_casesensitive=True, is_regex=False, is_reverse=False):
+def filter_data(
+    log_filter,
+    data=None,
+    filepath=None,
+    is_casesensitive=True,
+    is_regex=False,
+    is_reverse=False,
+    encoding='utf-8',     # NEW: allows you to choose the file encoding
+    errors='strict'       # NEW: decoding error policy: 'strict' | 'replace' | 'ignore'
+):
     """
     Filter received data/file content and return the results
     :except IOError:
@@ -67,25 +76,23 @@ def filter_data(log_filter, data=None, filepath=None, is_casesensitive=True, is_
     # TODO: Log errors/warnings instead of print
     return_data = ""
     if filepath:
-        try:
-            with open(filepath, 'r') as file_object:
-                for line in file_object:
-                    if check_match(line, log_filter, is_regex, is_casesensitive, is_reverse):
-                        return_data += line
-            return return_data
-        except (IOError, EnvironmentError) as e:
-            print(e.strerror)
-            # TODO: Log error instead of print
-            # raise  # Should raise instead of just printing
-            return None
-    elif data:
+        # IMPORTANT: we don't catch or suppress exceptions - let them be raised in the caller.
+        # Adding explicit encoding and error policy.
+        with open(filepath, 'r', encoding=encoding, errors=errors) as file_object:
+            for line in file_object:
+                if check_match(line, log_filter, is_regex, is_casesensitive, is_reverse):
+                    return_data += line
+        return return_data
+    elif data is not None:
+        # We work with string data without file operations.
         for line in data.splitlines():
             if check_match(line, log_filter, is_regex, is_casesensitive, is_reverse):
-                return_data += line+"\n"
+                return_data += line + "\n"
         return return_data
+
     else:
         # TODO: Better error message for missing data/filepath
-        raise Exception("Data and filepath values are NULL!")
+         raise ValueError("Either 'data' or 'filepath' must be provided.")
 
 
 def check_match(line, filter_pattern, is_regex, is_casesensitive, is_reverse):
