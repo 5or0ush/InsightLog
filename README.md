@@ -23,6 +23,7 @@ InsightLog is a Python script for extracting and analyzing data from server log 
 3. Install requirements:
    ```bash
    pip3 install -r requirements.txt
+  
    ```
 
 ## Usage Example (as a Python module)
