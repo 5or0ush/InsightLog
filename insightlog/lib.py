@@ -77,28 +77,24 @@ def filter_data(
     :param is_reverse: boolean to inverse selection
     :return: string
     """
-    # BUG: This function returns None on error instead of raising
-    # BUG: No encoding handling in file reading (may crash on non-UTF-8 files)
-    # TODO: Log errors/warnings instead of print
     return_data = ""
-    if filepath:
-        # IMPORTANT: we don't catch or suppress exceptions - let them be raised in the caller.
-        # Adding explicit encoding and error policy.
-        with open(filepath, 'r', encoding=encoding, errors=errors) as file_object:
-            for line in file_object:
+if filepath:
+    try:
+        with open(filepath, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
                 if check_match(line, log_filter, is_regex, is_casesensitive, is_reverse):
                     return_data += line
         return return_data
-    elif data is not None:
-        # We work with string data without file operations.
-        for line in data.splitlines():
-            if check_match(line, log_filter, is_regex, is_casesensitive, is_reverse):
-                return_data += line + "\n"
-        return return_data
-
-    else:
-        # TODO: Better error message for missing data/filepath
-         raise ValueError("Either 'data' or 'filepath' must be provided.")
+    except (IOError, OSError) as e:
+        logging.error("Failed to read log file %s: %s", filepath, e)
+        raise
+elif data is not None:
+    for line in data.splitlines():
+        if check_match(line, log_filter, is_regex, is_casesensitive, is_reverse):
+            return_data += line + "\n"
+    return return_data
+else:
+    raise ValueError("Either 'data' or 'filepath' must be provided.")
 
 
 def check_match(line, filter_pattern, is_regex, is_casesensitive, is_reverse):
@@ -112,8 +108,8 @@ def check_match(line, filter_pattern, is_regex, is_casesensitive, is_reverse):
     :return: boolean
     """
     if is_regex:
-        check_result = re.match(filter_pattern, line) if is_casesensitive \
-            else re.match(filter_pattern, line, re.IGNORECASE)
+        check_result = re.search(filter_pattern, line) if is_casesensitive \
+            else re.search(filter_pattern, line, re.IGNORECASE)
     else:
         check_result = (filter_pattern in line) if is_casesensitive else (filter_pattern.lower() in line.lower())
     return check_result and not is_reverse
