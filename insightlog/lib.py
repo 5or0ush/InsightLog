@@ -80,7 +80,7 @@ def filter_data(
     return_data = ""
     if filepath:
         try:
-            with open(filepath, "r", encoding="utf-8", errors="replace") as f:
+            with open(filepath, "r", encoding=encoding, errors=errors) as f:
                 for line in f:
                     if check_match(line, log_filter, is_regex, is_casesensitive, is_reverse):
                         return_data += line
@@ -317,8 +317,11 @@ class InsightLogAnalyzer:
         :param index:
         :return:
         """
-        # BUG: This method does not remove by index
-        self.__filters.remove(index)
+        if not isinstance(index, int):
+            raise TypeError("index must be an int")
+        if index < 0 or index >= len(self.__filters):
+            raise IndexError("filter index out of range")
+        return self.__filters.pop(index)
 
     def clear_all_filters(self):
         """
