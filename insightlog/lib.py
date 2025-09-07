@@ -1,8 +1,11 @@
+from asyncio.log import logger
+import os
 import re
 import calendar
 from insightlog.settings import *
 from insightlog.validators import *
 from datetime import datetime
+import io
 
 
 def get_service_settings(service_name):
@@ -123,19 +126,51 @@ def get_web_requests(data, pattern, date_pattern=None, date_keys=None):
     :return: list
     """
     # BUG: Output format inconsistent with get_auth_requests
-    # BUG: No handling/logging for malformed lines
+    # fix BUG: No handling/logging for malformed lines
     if date_pattern and not date_keys:
         raise Exception("date_keys is not defined")
-    requests_dict = re.findall(pattern, data, flags=re.IGNORECASE)
+
+    compiled = re.compile(pattern, flags=re.IGNORECASE)
     requests = []
-    for request_tuple in requests_dict:
-        if date_pattern:
-            str_datetime = __get_iso_datetime(request_tuple[1], date_pattern, date_keys)
-        else:
-            str_datetime = request_tuple[1]
-        requests.append({'DATETIME': str_datetime, 'IP': request_tuple[0],
-                         'METHOD': request_tuple[2], 'ROUTE': request_tuple[3], 'CODE': request_tuple[4],
-                         'REFERRER': request_tuple[5], 'USERAGENT': request_tuple[6]})
+    expected_groups = 7  # IP, DATETIME/RAW, METHOD, ROUTE, CODE, REFERRER, USERAGENT
+
+    for lineno, line in enumerate(data.splitlines(), start=1):
+        m = compiled.search(line)
+        if not m:
+            logger.warning("get_web_requests: unmatched line %d: %s", lineno, line.strip())
+            continue
+
+        request_tuple = m.groups()
+        if len(request_tuple) < expected_groups:
+            logger.warning("get_web_requests: malformed line %d (groups=%d, expected=%d): %s",
+                           lineno, len(request_tuple), expected_groups, line.strip())
+            continue
+
+        try:
+            if date_pattern:
+                str_datetime = __get_iso_datetime(request_tuple[1], date_pattern, date_keys)
+            else:
+                str_datetime = request_tuple[1]
+        except Exception as e:
+            logger.warning("get_web_requests: invalid datetime at line %d: %s (error=%s)",
+                           lineno, line.strip(), e)
+            continue
+
+        try:
+            requests.append({
+                'DATETIME': str_datetime,
+                'IP': request_tuple[0],
+                'METHOD': request_tuple[2],
+                'ROUTE': request_tuple[3],
+                'CODE': request_tuple[4],
+                'REFERRER': request_tuple[5],
+                'USERAGENT': request_tuple[6]
+            })
+        except Exception as e:
+            logger.warning("get_web_requests: unexpected build error at line %d: %s (error=%s)",
+                           lineno, line.strip(), e)
+            continue
+
     return requests
 
 
@@ -309,19 +344,40 @@ class InsightLogAnalyzer:
         Apply all defined patterns and return filtered data
         :return: string
         """
-        # BUG: Large files are read into memory at once (performance issue)
+        # FIX BUG: Large files are read into memory at once (performance issue)
         # BUG: No warning or log for empty files
-        to_return = ""
-        if self.data:
-            for line in self.data.splitlines():
+        # Stream lines to avoid loading entire files or building large intermediate lists.
+        # Also warn if the input source is empty.
+        out_lines = []
+
+        if self.data is not None:
+            if self.data == "":
+                logger.warning("filter_all: empty in-memory data")
+                return ""
+            # Iterate lazily over the string without splitlines() list allocation
+            for line in io.StringIO(self.data):
                 if self.check_all_matches(line, self.__filters):
-                    to_return += line+"\n"
+                # Ensure newline termination
+                    out_lines.append(line if line.endswith("\n") else line + "\n")
         else:
-            with open(self.filepath, 'r') as file_object:
-                for line in file_object:
-                    if self.check_all_matches(line, self.__filters):
-                        to_return += line
-        return to_return
+        # File path mode
+            try:
+                size = os.path.getsize(self.filepath)
+            except OSError as e:
+                logger.error("filter_all: cannot stat %s: %s", self.filepath, e)
+                raise
+        if size == 0:
+            logger.warning("filter_all: empty file: %s", self.filepath)
+            return ""
+
+        # Use explicit encoding and error policy to be consistent
+        with open(self.filepath, "r", encoding="utf-8", errors="strict") as file_object:
+            for line in file_object:
+                if self.check_all_matches(line, self.__filters):
+                    out_lines.append(line)
+
+        return "".join(out_lines)
+      
 
     def get_requests(self):
         """
