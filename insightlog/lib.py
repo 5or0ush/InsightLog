@@ -85,16 +85,13 @@ if filepath:
                 if check_match(line, log_filter, is_regex, is_casesensitive, is_reverse):
                     return_data += line
         return return_data
-    except (IOError, OSError) as e:
-        logging.error("Failed to read log file %s: %s", filepath, e)
-        raise
 elif data is not None:
     for line in data.splitlines():
         if check_match(line, log_filter, is_regex, is_casesensitive, is_reverse):
             return_data += line + "\n"
     return return_data
 else:
-    raise ValueError("Either 'data' or 'filepath' must be provided.")
+    raise ValueError("Missing input: provide either `data` or `filepath`.")
 
 
 def check_match(line, filter_pattern, is_regex, is_casesensitive, is_reverse):
