@@ -6,7 +6,9 @@ import os
 import io
 from insightlog.settings import *
 from insightlog.validators import *
+
 from datetime import datetime
+import logging
 
 
 def get_service_settings(service_name):
@@ -204,12 +206,18 @@ def analyze_auth_request(request_info):
     :param request_info: string
     :return: dicts
     """
-    # BUG: No handling/logging for malformed lines
-    ipv4 = re.findall(IPv4_REGEX, request_info)
-    is_preauth = '[preauth]' in request_info.lower()
-    invalid_user = re.findall(AUTH_USER_INVALID_USER, request_info)
-    invalid_pass_user = re.findall(AUTH_PASS_INVALID_USER, request_info)
-    is_closed = 'connection closed by ' in request_info.lower()
+    text = request_info if isinstance(request_info, str) else str(request_info)
+
+    ipv4 = re.findall(IPv4_REGEX, text)
+    lower = text.lower()
+    is_preauth = '[preauth]' in lower
+    invalid_user = re.findall(AUTH_USER_INVALID_USER, text)
+    invalid_pass_user = re.findall(AUTH_PASS_INVALID_USER, text)
+    is_closed = 'connection closed by ' in lower
+
+    if not (ipv4 or invalid_user or invalid_pass_user or is_preauth or is_closed):
+        logging.warning("Malformed auth log line: %r", text.strip())
+
     return {'IP': ipv4[0] if ipv4 else None,
             'INVALID_USER': invalid_user[0] if invalid_user else None,
             'INVALID_PASS_USER': invalid_pass_user[0] if invalid_pass_user else None,
