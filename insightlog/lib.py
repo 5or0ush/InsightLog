@@ -1,14 +1,14 @@
-from asyncio.log import logger
 import os
 import re
 import calendar
-import os
 import io
 from insightlog.settings import *
 from insightlog.validators import *
 
 from datetime import datetime
 import logging
+
+logger = logging.getLogger(__name__)
 
 
 def get_service_settings(service_name):
@@ -78,20 +78,23 @@ def filter_data(
     :return: string
     """
     return_data = ""
-if filepath:
-    try:
-        with open(filepath, "r", encoding="utf-8", errors="replace") as f:
-            for line in f:
-                if check_match(line, log_filter, is_regex, is_casesensitive, is_reverse):
-                    return_data += line
+    if filepath:
+        try:
+            with open(filepath, "r", encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    if check_match(line, log_filter, is_regex, is_casesensitive, is_reverse):
+                        return_data += line
+            return return_data
+        except (IOError, OSError) as e:
+            logging.error("Failed to read log file %s: %s", filepath, e)
+            raise
+    elif data is not None:
+        for line in data.splitlines():
+            if check_match(line, log_filter, is_regex, is_casesensitive, is_reverse):
+                return_data += line + "\n"
         return return_data
-elif data is not None:
-    for line in data.splitlines():
-        if check_match(line, log_filter, is_regex, is_casesensitive, is_reverse):
-            return_data += line + "\n"
-    return return_data
-else:
-    raise ValueError("Missing input: provide either `data` or `filepath`.")
+    else:
+        raise ValueError("Missing input: provide either `data` or `filepath`.")
 
 
 def check_match(line, filter_pattern, is_regex, is_casesensitive, is_reverse):
@@ -344,33 +347,27 @@ class InsightLogAnalyzer:
         Apply all defined patterns and return filtered data
         :return: string
         """
-        # FIX BUG: Large files are read into memory at once (performance issue)
-        # BUG: No warning or log for empty files
-        # Stream lines to avoid loading entire files or building large intermediate lists.
-        # Also warn if the input source is empty.
         out_lines = []
 
         if self.data is not None:
             if self.data == "":
                 logger.warning("filter_all: empty in-memory data")
                 return ""
-            # Iterate lazily over the string without splitlines() list allocation
             for line in io.StringIO(self.data):
                 if self.check_all_matches(line, self.__filters):
-                # Ensure newline termination
                     out_lines.append(line if line.endswith("\n") else line + "\n")
-        else:
+            return "".join(out_lines)
+
         # File path mode
-            try:
-                size = os.path.getsize(self.filepath)
-            except OSError as e:
-                logger.error("filter_all: cannot stat %s: %s", self.filepath, e)
-                raise
+        try:
+            size = os.path.getsize(self.filepath)
+        except OSError as e:
+            logger.error("filter_all: cannot stat %s: %s", self.filepath, e)
+            raise
         if size == 0:
             logger.warning("filter_all: empty file: %s", self.filepath)
             return ""
 
-        # Use explicit encoding and error policy to be consistent
         with open(self.filepath, "r", encoding="utf-8", errors="strict") as file_object:
             for line in file_object:
                 if self.check_all_matches(line, self.__filters):
