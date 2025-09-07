@@ -1,10 +1,12 @@
+from asyncio.log import logger
+import os
 import re
 import calendar
+import os
+import io
 from insightlog.settings import *
 from insightlog.validators import *
-
 from datetime import datetime
-import os
 
 
 def get_service_settings(service_name):
@@ -50,7 +52,16 @@ def get_date_filter(settings, minute=datetime.now().minute, hour=datetime.now().
     return date_filter
 
 
-def filter_data(log_filter, data=None, filepath=None, is_casesensitive=True, is_regex=False, is_reverse=False):
+def filter_data(
+    log_filter,
+    data=None,
+    filepath=None,
+    is_casesensitive=True,
+    is_regex=False,
+    is_reverse=False,
+    encoding='utf-8',     # NEW: allows you to choose the file encoding
+    errors='strict'       # NEW: decoding error policy: 'strict' | 'replace' | 'ignore'
+):
     """
     Filter received data/file content and return the results
     :except IOError:
@@ -69,25 +80,23 @@ def filter_data(log_filter, data=None, filepath=None, is_casesensitive=True, is_
     # TODO: Log errors/warnings instead of print
     return_data = ""
     if filepath:
-        try:
-            with open(filepath, 'r') as file_object:
-                for line in file_object:
-                    if check_match(line, log_filter, is_regex, is_casesensitive, is_reverse):
-                        return_data += line
-            return return_data
-        except (IOError, EnvironmentError) as e:
-            print(e.strerror)
-            # TODO: Log error instead of print
-            # raise  # Should raise instead of just printing
-            return None
-    elif data:
+        # IMPORTANT: we don't catch or suppress exceptions - let them be raised in the caller.
+        # Adding explicit encoding and error policy.
+        with open(filepath, 'r', encoding=encoding, errors=errors) as file_object:
+            for line in file_object:
+                if check_match(line, log_filter, is_regex, is_casesensitive, is_reverse):
+                    return_data += line
+        return return_data
+    elif data is not None:
+        # We work with string data without file operations.
         for line in data.splitlines():
             if check_match(line, log_filter, is_regex, is_casesensitive, is_reverse):
-                return_data += line+"\n"
+                return_data += line + "\n"
         return return_data
+
     else:
         # TODO: Better error message for missing data/filepath
-        raise Exception("Data and filepath values are NULL!")
+         raise ValueError("Either 'data' or 'filepath' must be provided.")
 
 
 def check_match(line, filter_pattern, is_regex, is_casesensitive, is_reverse):
@@ -118,19 +127,51 @@ def get_web_requests(data, pattern, date_pattern=None, date_keys=None):
     :return: list
     """
     # BUG: Output format inconsistent with get_auth_requests
-    # BUG: No handling/logging for malformed lines
+    # fix BUG: No handling/logging for malformed lines
     if date_pattern and not date_keys:
         raise Exception("date_keys is not defined")
-    requests_dict = re.findall(pattern, data, flags=re.IGNORECASE)
+
+    compiled = re.compile(pattern, flags=re.IGNORECASE)
     requests = []
-    for request_tuple in requests_dict:
-        if date_pattern:
-            str_datetime = __get_iso_datetime(request_tuple[1], date_pattern, date_keys)
-        else:
-            str_datetime = request_tuple[1]
-        requests.append({'DATETIME': str_datetime, 'IP': request_tuple[0],
-                         'METHOD': request_tuple[2], 'ROUTE': request_tuple[3], 'CODE': request_tuple[4],
-                         'REFERRER': request_tuple[5], 'USERAGENT': request_tuple[6]})
+    expected_groups = 7  # IP, DATETIME/RAW, METHOD, ROUTE, CODE, REFERRER, USERAGENT
+
+    for lineno, line in enumerate(data.splitlines(), start=1):
+        m = compiled.search(line)
+        if not m:
+            logger.warning("get_web_requests: unmatched line %d: %s", lineno, line.strip())
+            continue
+
+        request_tuple = m.groups()
+        if len(request_tuple) < expected_groups:
+            logger.warning("get_web_requests: malformed line %d (groups=%d, expected=%d): %s",
+                           lineno, len(request_tuple), expected_groups, line.strip())
+            continue
+
+        try:
+            if date_pattern:
+                str_datetime = __get_iso_datetime(request_tuple[1], date_pattern, date_keys)
+            else:
+                str_datetime = request_tuple[1]
+        except Exception as e:
+            logger.warning("get_web_requests: invalid datetime at line %d: %s (error=%s)",
+                           lineno, line.strip(), e)
+            continue
+
+        try:
+            requests.append({
+                'DATETIME': str_datetime,
+                'IP': request_tuple[0],
+                'METHOD': request_tuple[2],
+                'ROUTE': request_tuple[3],
+                'CODE': request_tuple[4],
+                'REFERRER': request_tuple[5],
+                'USERAGENT': request_tuple[6]
+            })
+        except Exception as e:
+            logger.warning("get_web_requests: unexpected build error at line %d: %s (error=%s)",
+                           lineno, line.strip(), e)
+            continue
+
     return requests
 
 
@@ -302,37 +343,80 @@ class InsightLogAnalyzer:
         Apply all defined patterns and return filtered data
         :return: string
         """
-        # BUG: Large files are read into memory at once (performance issue)
+        # FIX BUG: Large files are read into memory at once (performance issue)
         # BUG: No warning or log for empty files
-        to_return = ""
-        if self.data:
-            for line in self.data.splitlines():
-                if self.check_all_matches(line, self.__filters):
-                    to_return += line+"\n"
-        else:
-            with open(self.filepath, 'r') as file_object:
-                for line in file_object:
-                    if self.check_all_matches(line, self.__filters):
-                        to_return += line
-        return to_return
+        # Stream lines to avoid loading entire files or building large intermediate lists.
+        # Also warn if the input source is empty.
+        out_lines = []
 
-    def get_requests(self):
+        if self.data is not None:
+            if self.data == "":
+                logger.warning("filter_all: empty in-memory data")
+                return ""
+            # Iterate lazily over the string without splitlines() list allocation
+            for line in io.StringIO(self.data):
+                if self.check_all_matches(line, self.__filters):
+                # Ensure newline termination
+                    out_lines.append(line if line.endswith("\n") else line + "\n")
+        else:
+        # File path mode
+            try:
+                size = os.path.getsize(self.filepath)
+            except OSError as e:
+                logger.error("filter_all: cannot stat %s: %s", self.filepath, e)
+                raise
+        if size == 0:
+            logger.warning("filter_all: empty file: %s", self.filepath)
+            return ""
+
+        # Use explicit encoding and error policy to be consistent
+        with open(self.filepath, "r", encoding="utf-8", errors="strict") as file_object:
+            for line in file_object:
+                if self.check_all_matches(line, self.__filters):
+                    out_lines.append(line)
+
+        return "".join(out_lines)
+      
+
+    def get_requests(self, output_format='dict'):
         """
-        Analyze data (from the logs) and return list of auth requests formatted as the model (pattern) defined.
-        :return:
+        Analyze data (from the logs) and return requests in specified format.
+        Supported formats: 'dict', 'json', 'csv'.
+        :param output_format: string specifying output format
+        :return: data in specified format
         """
-        # TODO: Add support for CSV and JSON output
         data = self.filter_all()
         request_pattern = self.__settings['request_model']
         date_pattern = self.__settings['date_pattern']
         date_keys = self.__settings['date_keys']
+
         if self.__settings['type'] == 'web0':
-            return get_web_requests(data, request_pattern, date_pattern, date_keys)
+            requests = get_web_requests(data, request_pattern, date_pattern, date_keys)
         elif self.__settings['type'] == 'auth':
-            return get_auth_requests(data, request_pattern, date_pattern, date_keys)
+            requests = get_auth_requests(data, request_pattern, date_pattern, date_keys)
         else:
-            # TODO: Support more log formats (e.g., IIS, custom logs)
-            return None
+            requests = []
+
+        if output_format == 'dict':
+            return requests
+        elif output_format == 'json':
+            import json
+            return json.dumps(requests)
+        elif output_format == 'csv':
+            import csv
+            import io
+            if not requests:
+                return ""
+            # Get headers from keys of first dict
+            headers = requests[0].keys()
+            output = io.StringIO()
+            writer = csv.DictWriter(output, fieldnames=headers)
+            writer.writeheader()
+            for row in requests:
+                writer.writerow(row)
+            return output.getvalue()
+        else:
+            raise Exception("Unsupported output format: " + output_format)
 
     # TODO: Add log level filtering (e.g., only errors)
     def add_log_level_filter(self, level):
@@ -357,6 +441,8 @@ class InsightLogAnalyzer:
         Export filtered results to a CSV file
         :param path: string
         """
-        pass  # Feature stub
+        csv_data = self.get_requests('csv')
+        with open(path, 'w', newline='') as csvfile:
+            csvfile.write(csv_data)
 
 # TODO: Write more tests for edge cases, error handling, and malformed input
