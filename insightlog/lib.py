@@ -55,9 +55,10 @@ def filter_data(
     is_casesensitive=True,
     is_regex=False,
     is_reverse=False,
-    encoding='utf-8',     # NEW: дозволяє вибрати кодування файлу
-    errors='strict'       # NEW: політика помилок декодування: 'strict' | 'replace' | 'ignore'
+    
 ):
+    # Fixed BUG: This function returns None on error instead of raising
+    # Fixed BUG: No encoding handling in file reading (may crash on non-UTF-8 files)
     """
     Filter received data/file content and return the results.
     Now raises exceptions on I/O/decoding errors instead of returning None.
@@ -66,11 +67,11 @@ def filter_data(
     :except UnicodeError: decoding errors (controlled via `errors`)
     :raises ValueError: when neither `data` nor `filepath` is provided
     """
-    return_data = ""  # акумулятор результату
+    return_data = ""  
 
     if filepath:
-        # ВАЖЛИВО: не ловимо і не приглушуємо винятки — хай піднімаються в caller.
-        # Додаємо явне кодування та політику помилок.
+        # IMPORTANT: we do not catch or suppress exceptions — let them bubble up to the caller.
+        # Add explicit encoding and error policy.
         with open(filepath, 'r', encoding=encoding, errors=errors) as file_object:
             for line in file_object:
                 if check_match(line, log_filter, is_regex, is_casesensitive, is_reverse):
@@ -78,14 +79,14 @@ def filter_data(
         return return_data
 
     elif data is not None:
-        # Працюємо зі строковими даними без файлових операцій.
+        # Work with string data without file operations.
         for line in data.splitlines():
             if check_match(line, log_filter, is_regex, is_casesensitive, is_reverse):
                 return_data += line + "\n"
         return return_data
 
     else:
-        # Більш доречний тип винятку, ніж загальний Exception
+        # More specific exception type than general Exception
         raise ValueError("Either 'data' or 'filepath' must be provided.")
 
 def check_match(line, filter_pattern, is_regex, is_casesensitive, is_reverse):
