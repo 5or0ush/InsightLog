@@ -55,7 +55,8 @@ def filter_data(
     is_casesensitive=True,
     is_regex=False,
     is_reverse=False,
-    
+    encoding='utf-8',     # NEW: allows you to choose the file encoding
+    errors='strict'       # NEW: decoding error policy: 'strict' | 'replace' | 'ignore'
 ):
     # Fixed BUG: This function returns None on error instead of raising
     # Fixed BUG: No encoding handling in file reading (may crash on non-UTF-8 files)
