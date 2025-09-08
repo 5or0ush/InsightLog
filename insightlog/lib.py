@@ -48,45 +48,45 @@ def get_date_filter(settings, minute=datetime.now().minute, hour=datetime.now().
     return date_filter
 
 
-def filter_data(log_filter, data=None, filepath=None, is_casesensitive=True, is_regex=False, is_reverse=False):
+def filter_data(
+    log_filter,
+    data=None,
+    filepath=None,
+    is_casesensitive=True,
+    is_regex=False,
+    is_reverse=False,
+    encoding='utf-8',     # NEW: дозволяє вибрати кодування файлу
+    errors='strict'       # NEW: політика помилок декодування: 'strict' | 'replace' | 'ignore'
+):
     """
-    Filter received data/file content and return the results
-    :except IOError:
-    :except EnvironmentError:
-    :raises Exception:
-    :param log_filter: string
-    :param data: string
-    :param filepath: string
-    :param is_casesensitive: boolean
-    :param is_regex: boolean
-    :param is_reverse: boolean to inverse selection
-    :return: string
+    Filter received data/file content and return the results.
+    Now raises exceptions on I/O/decoding errors instead of returning None.
+
+    :except OSError: file errors (not found, permission denied, etc.)
+    :except UnicodeError: decoding errors (controlled via `errors`)
+    :raises ValueError: when neither `data` nor `filepath` is provided
     """
-    # BUG: This function returns None on error instead of raising
-    # BUG: No encoding handling in file reading (may crash on non-UTF-8 files)
-    # TODO: Log errors/warnings instead of print
-    return_data = ""
+    return_data = ""  # акумулятор результату
+
     if filepath:
-        try:
-            with open(filepath, 'r') as file_object:
-                for line in file_object:
-                    if check_match(line, log_filter, is_regex, is_casesensitive, is_reverse):
-                        return_data += line
-            return return_data
-        except (IOError, EnvironmentError) as e:
-            print(e.strerror)
-            # TODO: Log error instead of print
-            # raise  # Should raise instead of just printing
-            return None
-    elif data:
+        # ВАЖЛИВО: не ловимо і не приглушуємо винятки — хай піднімаються в caller.
+        # Додаємо явне кодування та політику помилок.
+        with open(filepath, 'r', encoding=encoding, errors=errors) as file_object:
+            for line in file_object:
+                if check_match(line, log_filter, is_regex, is_casesensitive, is_reverse):
+                    return_data += line
+        return return_data
+
+    elif data is not None:
+        # Працюємо зі строковими даними без файлових операцій.
         for line in data.splitlines():
             if check_match(line, log_filter, is_regex, is_casesensitive, is_reverse):
-                return_data += line+"\n"
+                return_data += line + "\n"
         return return_data
-    else:
-        # TODO: Better error message for missing data/filepath
-        raise Exception("Data and filepath values are NULL!")
 
+    else:
+        # Більш доречний тип винятку, ніж загальний Exception
+        raise ValueError("Either 'data' or 'filepath' must be provided.")
 
 def check_match(line, filter_pattern, is_regex, is_casesensitive, is_reverse):
     """
@@ -272,8 +272,14 @@ class InsightLogAnalyzer:
         :param index:
         :return:
         """
-        # BUG: This method does not remove by index
-        self.__filters.remove(index)
+        # fixed BUG: This method does not remove by index
+        if not isinstance(index, int):
+            raise TypeError("index must be an int")
+        
+        if index < 0 or index >= len(self.__filters):
+            raise IndexError("index out of range")
+
+        return self.__filters.pop(index)
 
     def clear_all_filters(self):
         """
